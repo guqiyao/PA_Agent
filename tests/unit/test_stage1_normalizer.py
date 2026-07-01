@@ -431,3 +431,91 @@ def test_normalizes_breakout_test_role_and_strengthens_bash_typo() -> None:
     assert out["bar_by_bar_summary"][0]["role"] == "test"
     assert out["bar_by_bar_summary"][0]["context_effect"] == "strengthens_bear"
     assert out["bar_by_bar_summary"][1]["role"] == "structure"
+
+
+# ── Rescue: pattern name mis-placed in cycle_position ─────────────────────────
+
+def test_rescue_descending_triangle_from_cycle_position() -> None:
+    """Regression: model outputs cycle_position='descending_triangle' instead of
+    adding it to detected_patterns with cycle_position set to a valid state."""
+    from pa_agent.ai.stage1_normalizer import _rescue_pattern_from_cycle_position
+
+    obj: dict = {
+        "cycle_position": "descending_triangle",
+        "detected_patterns": [],
+    }
+    rescued = _rescue_pattern_from_cycle_position(obj)
+
+    assert rescued is True
+    assert obj["cycle_position"] == "trading_range"
+    assert "descending_triangle" in obj["detected_patterns"]
+
+
+def test_rescue_does_not_alter_valid_cycle_position() -> None:
+    from pa_agent.ai.stage1_normalizer import _rescue_pattern_from_cycle_position
+
+    obj: dict = {"cycle_position": "broad_channel", "detected_patterns": []}
+    rescued = _rescue_pattern_from_cycle_position(obj)
+
+    assert rescued is False
+    assert obj["cycle_position"] == "broad_channel"
+    assert obj["detected_patterns"] == []
+
+
+def test_rescue_all_triangle_variants() -> None:
+    from pa_agent.ai.stage1_normalizer import _rescue_pattern_from_cycle_position
+
+    triangles = [
+        "ascending_triangle",
+        "descending_triangle",
+        "symmetrical_triangle",
+        "expanding_triangle",
+    ]
+    for triangle in triangles:
+        obj: dict = {"cycle_position": triangle, "detected_patterns": []}
+        rescued = _rescue_pattern_from_cycle_position(obj)
+        assert rescued is True, f"Expected rescue for {triangle}"
+        assert obj["cycle_position"] == "trading_range"
+        assert triangle in obj["detected_patterns"]
+
+
+def test_rescue_preserves_existing_detected_patterns() -> None:
+    from pa_agent.ai.stage1_normalizer import _rescue_pattern_from_cycle_position
+
+    obj: dict = {
+        "cycle_position": "descending_triangle",
+        "detected_patterns": ["breakout_failure"],
+    }
+    _rescue_pattern_from_cycle_position(obj)
+
+    assert "breakout_failure" in obj["detected_patterns"]
+    assert "descending_triangle" in obj["detected_patterns"]
+
+
+def test_normalize_stage1_rescues_descending_triangle_end_to_end() -> None:
+    """Full normalize_stage1 pipeline: pattern rescued, triangle strategy file loaded."""
+    raw = {
+        **VALID_STAGE1,
+        "cycle_position": "descending_triangle",
+        "direction": "bearish",
+        "detected_patterns": [],
+    }
+    # Remove pre-set strategy_files_needed so the router recalculates after rescue.
+    raw.pop("strategy_files_needed", None)
+
+    out = normalize_stage1(raw)
+
+    assert out["cycle_position"] == "trading_range"
+    assert "descending_triangle" in out["detected_patterns"]
+    # Router should have loaded the triangle strategy file as a pattern overlay.
+    assert "文件27-三角形与收敛形态.txt" in out["strategy_files_needed"]
+
+
+def test_rescue_wedge_fallback_is_broad_channel() -> None:
+    from pa_agent.ai.stage1_normalizer import _rescue_pattern_from_cycle_position
+
+    obj: dict = {"cycle_position": "wedge", "detected_patterns": []}
+    _rescue_pattern_from_cycle_position(obj)
+
+    assert obj["cycle_position"] == "broad_channel"
+    assert "wedge" in obj["detected_patterns"]

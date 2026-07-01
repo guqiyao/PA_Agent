@@ -498,6 +498,68 @@ def _pad_bar_by_bar_summary_to_minimum(
     )
 
 
+# Pattern-name values the model occasionally places in cycle_position instead of
+# detected_patterns.  Each entry maps the invalid cp string →
+#   (pattern_tag_to_rescue, fallback_cycle_position).
+# The fallback is the most natural host structure for that formation.
+_PATTERN_MISPLACED_AS_CYCLE: dict[str, tuple[str, str]] = {
+    "ascending_triangle":   ("ascending_triangle",   "trading_range"),
+    "descending_triangle":  ("descending_triangle",  "trading_range"),
+    "symmetrical_triangle": ("symmetrical_triangle", "trading_range"),
+    "expanding_triangle":   ("expanding_triangle",   "trading_range"),
+    "wedge":                ("wedge",                "broad_channel"),
+    "double_top":           ("double_top_bottom",    "trading_range"),
+    "double_bottom":        ("double_top_bottom",    "trading_range"),
+    "double_top_bottom":    ("double_top_bottom",    "trading_range"),
+    "mtr":                  ("mtr",                  "broad_channel"),
+    "final_flag":           ("final_flag",           "broad_channel"),
+    "breakout_failure":     ("breakout_failure",     "trading_range"),
+    "failed_breakout":      ("breakout_failure",     "trading_range"),
+    "breakout_test":        ("breakout_test",        "trading_range"),
+    "barbwire":             ("barbwire",             "trading_range"),
+}
+
+_VALID_CYCLE_POSITIONS: frozenset[str] = frozenset([
+    "spike", "micro_channel", "tight_channel", "normal_channel", "broad_channel",
+    "trending_tr", "trading_range", "extreme_tr", "unknown",
+])
+
+
+def _rescue_pattern_from_cycle_position(out: dict[str, Any]) -> bool:
+    """Fix the model putting a pattern name (e.g. 'descending_triangle') in cycle_position.
+
+    When detected, the pattern tag is injected into detected_patterns and cycle_position
+    is replaced with the most natural fallback host state.  Returns True if a rescue was
+    performed.
+    """
+    cp = str(out.get("cycle_position", "") or "").strip().lower()
+    if cp in _VALID_CYCLE_POSITIONS:
+        return False  # already valid — nothing to do
+
+    entry = _PATTERN_MISPLACED_AS_CYCLE.get(cp)
+    if entry is None:
+        # Unknown value but not a known pattern name: leave it for the validator to reject.
+        return False
+
+    pattern_tag, fallback_cp = entry
+
+    # Inject the rescued pattern tag into detected_patterns.
+    patterns: list[str] = list(out.get("detected_patterns") or [])
+    if pattern_tag not in patterns:
+        patterns.insert(0, pattern_tag)
+        out["detected_patterns"] = patterns
+
+    logger.warning(
+        "cycle_position %r is a pattern name, not a market state — "
+        "rescued tag %r into detected_patterns and replaced cycle_position with %r",
+        cp,
+        pattern_tag,
+        fallback_cp,
+    )
+    out["cycle_position"] = fallback_cp
+    return True
+
+
 _INCREMENTAL_TRACKED_FIELDS = (
     "cycle_position",
     "alternative_cycle_position",
@@ -602,6 +664,9 @@ def normalize_stage1(
             logger.debug("Unwrapped stage1_diagnosis nested wrapper")
 
     lenient = normalization_mode == "lenient"
+
+    # ── Rescue pattern names misplaced in cycle_position ─────────────────────
+    _rescue_pattern_from_cycle_position(out)
 
     # ── DecisionNodeEngine: fill §1.1/§2.3/§2.4 (before strategy_files routing) ──
     if kline_frame is not None:
